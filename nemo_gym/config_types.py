@@ -722,7 +722,10 @@ def maybe_get_server_instance_config(
     maybe_server_instance_config_dict = {
         "name": name,
         "server_type_config_dict": server_type_config_dict,
-        **OmegaConf.to_container(server_type_config_dict),
+        # Dataset consumers use the validated server model below rather than the
+        # original DictConfig. Resolve interpolations here so paths backed by
+        # `${oc.env:...}` do not become literal filenames during collation.
+        **OmegaConf.to_container(server_type_config_dict, resolve=True),
     }
     try:
         config = ServerInstanceConfigTypeAdapter.validate_python(maybe_server_instance_config_dict)

@@ -255,6 +255,26 @@ class TestTokenMetadataValidation:
 
 
 class TestNeMoGymChatCompletionSchemas:
+    def test_interleaved_reasoning_history_round_trip(self) -> None:
+        payload = {
+            "messages": [
+                {"role": "user", "content": "What is 6*7?"},
+                {
+                    "role": "assistant",
+                    "content": "The answer is 42.",
+                    "reasoning_content": "Let me calculate...",
+                },
+                {"role": "user", "content": "Add one."},
+            ],
+            "model": "gpt-test",
+        }
+
+        params = NeMoGymChatCompletionCreateParamsNonStreaming.model_validate(payload)
+        round_tripped = NeMoGymChatCompletionCreateParamsNonStreaming.model_validate_json(params.model_dump_json())
+
+        assert round_tripped == params
+        assert params.messages[1]["reasoning_content"] == "Let me calculate..."
+
     def test_user_audio_and_file_content_parts_round_trip(self) -> None:
         payload = {
             "messages": [

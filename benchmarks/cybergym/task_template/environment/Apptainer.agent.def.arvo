@@ -1,0 +1,70 @@
+Bootstrap: docker
+From: {vulnerable_image}
+
+%files
+    /etc/ssl/certs/ca-certificates.crt /tmp/host-ca-certificates.crt
+    submit.sh /workspace/submit.sh
+{task_data_file_directives}
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    export UV_SYSTEM_CERTS=true
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        autoconf automake bison bsdutils build-essential ca-certificates curl git iptables \
+        libevent-dev libncurses-dev libssl-dev pkg-config wget
+    rm -rf /var/lib/apt/lists/*
+    install -m 0644 /tmp/host-ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+    curl -fL --retry 5 --retry-delay 2 \
+        -o /tmp/tmux.tar.gz https://codeload.github.com/tmux/tmux/tar.gz/refs/tags/3.5a
+    printf '%s  %s\n' \
+        '49e68b41dec0bf408990160ee12fa29b06dee8f74c1f0b4b71c9d2a1477dd910' \
+        /tmp/tmux.tar.gz \
+        | sha256sum -c -
+    tar xzf /tmp/tmux.tar.gz -C /tmp
+    cd /tmp/tmux-3.5a
+    sh autogen.sh
+    ./configure --prefix=/usr/local
+    make -j"$(nproc)"
+    make install
+    rm -rf /tmp/tmux*
+    tmux -V
+
+    # Harbor's persistent command server needs modern Python. ARVO bases can
+    # be Ubuntu 16.04/Python 3.5, so keep this runtime inside the SIF instead
+    # of bind-mounting a potentially ABI-incompatible host interpreter.
+    curl -LsSf https://astral.sh/uv/0.11.17/install.sh -o /tmp/uv-installer.sh
+    env UV_INSTALL_DIR=/usr/local/bin sh /tmp/uv-installer.sh
+    rm -f /tmp/uv-installer.sh
+    UV_PYTHON_INSTALL_DIR=/opt/uv-python uv python install 3.12.3
+    UV_PYTHON_INSTALL_DIR=/opt/uv-python uv venv --python 3.12.3 /opt/harbor-runtime
+    uv pip install --python /opt/harbor-runtime/bin/python \
+        'fastapi==0.141.1' 'uvicorn==0.52.4'
+    ln -sf /opt/harbor-runtime/bin/python /usr/local/bin/python3
+
+    printf '%s\n' \
+        'greenlet<3.2' \
+        'numpy<2.3' \
+        'pandas<2.3' \
+        'contourpy<1.3' \
+        'tiktoken<0.12' \
+        > /etc/uv-constraints.txt
+
+    mkdir -p /workspace/task_data
+{task_data_download_directives}
+    chmod +x /workspace/submit.sh
+
+    # Keep all trusted verification assets out of the flattened agent SIF.
+    rm -rf /out /bin/arvo /tmp/poc
+
+%environment
+    export TEST_DIR=/tests
+    export UV_CONSTRAINT=/etc/uv-constraints.txt
+    export UV_SYSTEM_CERTS=true
+    export VIRTUAL_ENV=/opt/harbor-runtime
+    export PATH="/opt/harbor-runtime/bin:/root/.local/bin:$PATH"
+
+%runscript
+    exec bash -lc "sleep infinity"

@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+config_paths:
+  - benchmarks/cybergym/config.yaml
+
+cybergym_training:
+  _inherit_from: cybergym
+  responses_api_agents:
+    harbor_agent:
+      concurrency: ${oc.env:CYBERGYM_APPTAINER_CONCURRENCY,1}
+      harbor_environment_type: null
+      harbor_environment_import_path: responses_api_agents.harbor_agent.custom_envs.cybergym.cybergym:CyberGymApptainerEnvironment
+      harbor_environment_kwargs:
+        workdir: /workspace
+        singularity_image_cache_dir: ${oc.env:CYBERGYM_APPTAINER_CACHE_DIR,cache/cybergym/apptainer}
+        singularity_executable: ${oc.env:CYBERGYM_APPTAINER_EXECUTABLE,''}
+        cybergym_agent_sif: ${oc.env:CYBERGYM_APPTAINER_AGENT_SIF,''}
+      datasets:
+        - name: cybergym_train
+          type: train
+          jsonl_fpath: benchmarks/cybergym/data/cybergym_train.jsonl
+          num_repeats: 1
+          license: Apache 2.0
+        - name: cybergym_validation
+          type: validation
+          jsonl_fpath: benchmarks/cybergym/data/cybergym_validation.jsonl
+          num_repeats: 1
+          license: Apache 2.0

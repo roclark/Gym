@@ -29,6 +29,7 @@ from responses_api_agents.harbor_agent.app import (
     HarborAgent,
     HarborAgentConfig,
     HarborRunRequest,
+    HarborTrialFailureError,
 )
 from responses_api_agents.harbor_agent.utils import HarborAgentUtils
 
@@ -443,6 +444,32 @@ class TestApp:
         assert len(response.response.output) == 0
         assert response.responses_create_params.temperature == 0.3
         assert response.responses_create_params.input == []
+
+    async def test_strict_mode_raises_instead_of_emitting_synthetic_zero(self):
+        server = _make_server(harbor_fail_on_trial_error=True)
+        with _harbor_run_mocks(side_effect=Exception("Docker Compose is unavailable")):
+            with pytest.raises(HarborTrialFailureError, match="no reward was emitted"):
+                await server.run(_make_run_request(instance_id="scientific::fail_task"))
+
+    async def test_strict_mode_rejects_trial_without_verifier_result(self):
+        server = _make_server(harbor_fail_on_trial_error=True)
+        trial_result = {
+            "task_name": "test_task_123",
+            "exception_info": {
+                "exception_type": "RuntimeError",
+                "exception_message": "docker compose version failed",
+            },
+            "verifier_result": None,
+        }
+        with _harbor_run_mocks(trial_result=trial_result):
+            with pytest.raises(HarborTrialFailureError, match="docker compose version failed"):
+                await server.run(_make_run_request())
+
+    async def test_strict_mode_rejects_missing_verifier_without_exception_details(self):
+        server = _make_server(harbor_fail_on_trial_error=True)
+        with _harbor_run_mocks(trial_result={"task_name": "test_task_123", "verifier_result": None}):
+            with pytest.raises(HarborTrialFailureError, match="no exception details"):
+                await server.run(_make_run_request())
 
     @pytest.mark.parametrize(
         "model_name, expected",

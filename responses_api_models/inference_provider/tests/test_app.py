@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
 from nemo_gym.base_responses_api_model import CaptureStore, read_model_call_records
-from nemo_gym.openai_utils import NeMoGymAsyncOpenAI
+from nemo_gym.openai_utils import NeMoGymAsyncOpenAI, NeMoGymChatCompletionCreateParamsNonStreaming
 from nemo_gym.server_utils import ServerClient
 from responses_api_models.inference_provider.app import (
     InferenceProvider,
@@ -244,6 +244,40 @@ class TestInferenceProvider:
         assistant_msg = called_kwargs["messages"][1]
         assert "<think>" not in assistant_msg["content"]
         assert assistant_msg["content"] == "The answer is 42."
+
+    async def test_reasoning_parser_forwards_interleaved_reasoning_history(self) -> None:
+        server = _make_server(uses_reasoning_parser=True)
+
+        called_kwargs = {}
+
+        async def mock_create_chat(**kwargs):
+            nonlocal called_kwargs
+            called_kwargs = kwargs
+            return _mock_chat_response(content="The answer is 43.")
+
+        server._client = MagicMock(spec=NeMoGymAsyncOpenAI)
+        server._client.create_chat_completion = AsyncMock(side_effect=mock_create_chat)
+
+        body = NeMoGymChatCompletionCreateParamsNonStreaming.model_validate(
+            {
+                "messages": [
+                    {"role": "user", "content": "What is 6*7?"},
+                    {
+                        "role": "assistant",
+                        "content": "The answer is 42.",
+                        "reasoning_content": "Let me calculate...",
+                    },
+                    {"role": "user", "content": "Add one."},
+                ]
+            }
+        )
+        await server.chat_completions(MagicMock(), body)
+
+        assert called_kwargs["messages"][1] == {
+            "role": "assistant",
+            "content": "The answer is 42.",
+            "reasoning_content": "Let me calculate...",
+        }
 
     async def test_reasoning_parser_wraps_reasoning_content_in_response(self, monkeypatch: MonkeyPatch) -> None:
         server = _make_server(uses_reasoning_parser=True)

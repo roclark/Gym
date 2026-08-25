@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+config_paths:
+  - benchmarks/cybergym/config.yaml
+
+# Move the benchmark-scoped Harbor server to an Apptainer implementation. The
+# private host-side runner service retains the vulnerable/fixed verifier split.
+cybergym_apptainer:
+  _inherit_from: cybergym
+  responses_api_agents:
+    harbor_agent:
+      concurrency: ${oc.env:CYBERGYM_APPTAINER_CONCURRENCY,1}
+      harbor_environment_type: null
+      harbor_environment_import_path: responses_api_agents.harbor_agent.custom_envs.cybergym.cybergym:CyberGymApptainerEnvironment
+      harbor_environment_kwargs:
+        workdir: /workspace
+        singularity_image_cache_dir: ${oc.env:CYBERGYM_APPTAINER_CACHE_DIR,cache/cybergym/apptainer}
+        # Auto-detection prefers `apptainer` and falls back to `singularity`.
+        # Set CYBERGYM_APPTAINER_EXECUTABLE when the binary has another path/name.
+        singularity_executable: ${oc.env:CYBERGYM_APPTAINER_EXECUTABLE,''}
+        # Optional path or template such as /shared/cybergym/{task_name}.sif.
+        # Empty means build and cache each stripped agent SIF automatically.
+        cybergym_agent_sif: ${oc.env:CYBERGYM_APPTAINER_AGENT_SIF,''}

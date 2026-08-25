@@ -134,6 +134,15 @@ def setup_env_command(dir_path: Path, global_config_dict: DictConfig, prefix: st
     if should_skip_venv_setup:
         env_setup_cmd = f"source {venv_activate_fpath}"
     else:
+        # Some servers need to materialize a deterministic local dependency
+        # before uv reads their requirements (for example, a checksummed source
+        # archive whose Git transport is unavailable). Keep the hook optional
+        # so existing server setup commands are unchanged.
+        prepare_install_fpath = dir_path / "prepare_install.py"
+        prepare_install_cmd = (
+            f"{venv_python_fpath} prepare_install.py && " if prepare_install_fpath.exists() else ""
+        )
+
         has_pyproject_toml = (dir_path / "pyproject.toml").exists()
         has_requirements_txt = (dir_path / "requirements.txt").exists()
         if has_pyproject_toml and has_requirements_txt:
@@ -174,7 +183,10 @@ def setup_env_command(dir_path: Path, global_config_dict: DictConfig, prefix: st
             )
 
         prefix_cmd = f" > >(sed 's/^/({prefix}) /') 2> >(sed 's/^/({prefix}) /' >&2)"
-        env_setup_cmd = f"{uv_venv_cmd}{prefix_cmd} && source {venv_activate_fpath} && {install_cmd}{prefix_cmd}"
+        env_setup_cmd = (
+            f"{uv_venv_cmd}{prefix_cmd} && source {venv_activate_fpath} && "
+            f"{prepare_install_cmd}{install_cmd}{prefix_cmd}"
+        )
 
     return f"cd {dir_path} && {env_setup_cmd}"
 
@@ -194,6 +206,14 @@ def run_command(
 
     work_dir = f"{working_dir_path.absolute()}"
     custom_env = environ.copy()
+    # NeMo Gym installs each server in its own venv and Ray remote declarations
+    # select that venv's Python explicitly. Ray 2.58+ otherwise detects an
+    # ancestor `uv run` process and replaces the isolated worker environment
+    # with the launcher's project environment. Besides selecting the wrong
+    # dependencies, that hook rejects server working directories which do not
+    # contain the launcher's root pyproject.toml.
+    custom_env["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+
     # The server dir on PYTHONPATH lets `import app` work. When a caller passes `project_root` (the
     # dir containing resources_servers/, responses_api_agents/, ...), it's added so generated
     # `resources_servers.<name>.app`-style imports resolve from outside a repo checkout — opt-in, so

@@ -1319,6 +1319,29 @@ def _dataset(tmp_path: Path, name: str, rows: list) -> dict:
     return {"name": name, "type": "example", "jsonl_fpath": str(fpath)}
 
 
+def test_server_instance_resolves_dataset_path_interpolation(tmp_path: Path, monkeypatch) -> None:
+    dataset_path = tmp_path / "benchmark.jsonl"
+    monkeypatch.setenv("NEMO_GYM_TEST_DATASET_PATH", str(dataset_path))
+
+    config = _instance(
+        "benchmark_agent",
+        "responses_api_agents",
+        {
+            "entrypoint": "app.py",
+            "datasets": [
+                {
+                    "name": "benchmark",
+                    "type": "benchmark",
+                    "jsonl_fpath": "${oc.env:NEMO_GYM_TEST_DATASET_PATH}",
+                    "prepare_script": "prepare.py",
+                }
+            ],
+        },
+    )
+
+    assert config.datasets[0].jsonl_fpath == dataset_path
+
+
 class TestCollateTaskSourceStamping:
     """Pins the collate stamping contract (dataset-decoupling RFC): rows are stamped with
     task_source (the declaring instance) and carry NO agent_ref — the agent is a run-time

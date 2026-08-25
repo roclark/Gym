@@ -1,0 +1,53 @@
+# CyberGym ARVO agent container.
+# Derived from harbor-framework/harbor/adapters/cybergym (Apache-2.0),
+# modified for NeMo Gym's pinned Harbor runtime and restricted networking.
+FROM --platform=linux/amd64 {vulnerable_image}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    autoconf automake bison bsdutils build-essential ca-certificates curl git iptables \
+    libevent-dev libncurses-dev libssl-dev pkg-config wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu 16.04's tmux lacks flags required by Terminus-2. Fetch with the
+# builder's current trust store because the base image's legacy CA bundle
+# cannot validate modern GitHub certificates, then verify the pinned archive.
+ADD https://codeload.github.com/tmux/tmux/tar.gz/refs/tags/3.5a /tmp/tmux.tar.gz
+RUN printf '%s  %s\n' \
+        '49e68b41dec0bf408990160ee12fa29b06dee8f74c1f0b4b71c9d2a1477dd910' \
+        /tmp/tmux.tar.gz \
+        | sha256sum -c - \
+    && tar xzf /tmp/tmux.tar.gz -C /tmp \
+    && cd /tmp/tmux-3.5a \
+    && sh autogen.sh \
+    && ./configure --prefix=/usr/local \
+    && make -j"$(nproc)" \
+    && make install \
+    && rm -rf /tmp/tmux* \
+    && tmux -V
+
+# Keep optional agent installs compatible with ARVO's glibc 2.23.
+RUN printf '%s\n' \
+    'greenlet<3.2' \
+    'numpy<2.3' \
+    'pandas<2.3' \
+    'contourpy<1.3' \
+    'tiktoken<0.12' \
+    > /etc/uv-constraints.txt
+ENV UV_CONSTRAINT=/etc/uv-constraints.txt
+
+# Verification assets are held only by the task-server sidecar.
+RUN rm -rf /out /bin/arvo /tmp/poc
+
+WORKDIR /workspace
+COPY submit.sh /workspace/submit.sh
+RUN chmod +x /workspace/submit.sh
+
+{task_data_directives}
+
+ENV TEST_DIR=/tests
+ENV PATH="/root/.local/bin:${PATH}"
+
+COPY restrict-network.sh /usr/local/bin/restrict-network.sh
+RUN chmod +x /usr/local/bin/restrict-network.sh
+ENTRYPOINT ["/usr/local/bin/restrict-network.sh"]
+CMD ["bash", "-lc", "sleep infinity"]

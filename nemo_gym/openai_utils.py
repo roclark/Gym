@@ -993,6 +993,9 @@ NeMoGymChatCompletionMessageToolCallsParam: TypeAlias = Annotated[
 class NeMoGymChatCompletionAssistantMessageParam(ChatCompletionAssistantMessageParam, total=False):
     # Override the iterable which is annoying to work with.
     content: Union[str, List[ContentArrayOfContentPart], None]
+    # Reasoning providers return this field separately from assistant content,
+    # and agent harnesses replay it on subsequent chat-completions turns.
+    reasoning_content: Optional[str]
     tool_calls: Optional[NeMoGymChatCompletionMessageToolCallsParam] = None
 
 

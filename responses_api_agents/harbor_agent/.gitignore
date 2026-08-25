@@ -2,3 +2,4 @@ data/
 jobs/
 results/
 singularity_cache/
+.deps/

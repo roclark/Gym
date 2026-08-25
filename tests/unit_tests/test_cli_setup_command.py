@@ -66,6 +66,19 @@ class TestCLISetupCommandSetupEnvCommand:
 
         assert "uv pip install --override overrides.txt -r requirements.txt" in actual_command
 
+    def test_prepare_install_hook(self, tmp_path: Path) -> None:
+        server_dir = self._setup_server_dir(tmp_path)
+        (server_dir / "prepare_install.py").write_text("")
+
+        actual_command = setup_env_command(
+            dir_path=server_dir,
+            global_config_dict=self._debug_global_config_dict(tmp_path),
+            prefix="my server name",
+        )
+
+        expected_command = f"cd {server_dir} && uv venv --seed --allow-existing --python test python version {server_dir}/.venv > >(sed 's/^/(my server name) /') 2> >(sed 's/^/(my server name) /' >&2) && source {server_dir}/.venv/bin/activate && {server_dir}/.venv/bin/python prepare_install.py && uv pip install -r requirements.txt ray[default]==test ray version openai==test openai version > >(sed 's/^/(my server name) /') 2> >(sed 's/^/(my server name) /' >&2)"
+        assert expected_command == actual_command
+
     def test_skips_install_when_venv_present(self, tmp_path: Path) -> None:
         server_dir = self._setup_server_dir(tmp_path)
 
@@ -292,7 +305,11 @@ class TestCLISetupCommandRunCommand:
             executable="/bin/bash",
             shell=True,
             # Default (no project_root): only the server dir is on PYTHONPATH.
-            env={"PYTHONPATH": "/my path", "UV_CACHE_DIR": "default uv cache dir"},
+            env={
+                "PYTHONPATH": "/my path",
+                "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+                "UV_CACHE_DIR": "default uv cache dir",
+            },
             stdout="stdout",
             stderr="stderr",
         )
@@ -312,7 +329,11 @@ class TestCLISetupCommandRunCommand:
             "my command",
             executable="/bin/bash",
             shell=True,
-            env={"PYTHONPATH": "/my path:existing pythonpath", "UV_CACHE_DIR": "default uv cache dir"},
+            env={
+                "PYTHONPATH": "/my path:existing pythonpath",
+                "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+                "UV_CACHE_DIR": "default uv cache dir",
+            },
             stdout="stdout",
             stderr="stderr",
         )
@@ -334,7 +355,11 @@ class TestCLISetupCommandRunCommand:
             "my command",
             executable="/bin/bash",
             shell=True,
-            env={"PYTHONPATH": "/root/resources_servers/my_server:/root", "UV_CACHE_DIR": "default uv cache dir"},
+            env={
+                "PYTHONPATH": "/root/resources_servers/my_server:/root",
+                "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+                "UV_CACHE_DIR": "default uv cache dir",
+            },
             stdout="stdout",
             stderr="stderr",
         )
@@ -355,7 +380,11 @@ class TestCLISetupCommandRunCommand:
             "my command",
             executable="/bin/bash",
             shell=True,
-            env={"PYTHONPATH": "/my path", "UV_CACHE_DIR": "my uv cache dir"},
+            env={
+                "PYTHONPATH": "/my path",
+                "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+                "UV_CACHE_DIR": "my uv cache dir",
+            },
             stdout="stdout",
             stderr="stderr",
         )
@@ -377,6 +406,19 @@ class TestCLISetupCommandRunCommand:
         assert popen.call_args.kwargs["env"]["UV_CACHE_DIR"] == "isolated cache"
         assert popen.call_args.kwargs["stdout"] == "isolated stdout"
         assert popen.call_args.kwargs["stderr"] == "isolated stderr"
+
+    def test_disables_ray_uv_project_inheritance_for_child(self, monkeypatch: MonkeyPatch) -> None:
+        Popen_mock, _ = self._setup(monkeypatch)
+        parent_env = {"RAY_ENABLE_UV_RUN_RUNTIME_ENV": "1"}
+        monkeypatch.setattr(nemo_gym.cli.setup_command, "environ", parent_env)
+
+        run_command(
+            command="my command",
+            working_dir_path=Path("/my path"),
+        )
+
+        assert Popen_mock.call_args.kwargs["env"]["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] == "0"
+        assert parent_env["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] == "1"
 
 
 class TestGetNemoGymInstallFlags:
@@ -501,7 +543,11 @@ class TestCLISetupCommandRunCommandTeeLog(TestCLISetupCommandRunCommand):
             "set -o pipefail; (my command) 2>&1 | tee -a /tmp/gym_logs/my_resources_my_server.log",
             executable="/bin/bash",
             shell=True,
-            env={"PYTHONPATH": "/root/resources_servers/my_server", "UV_CACHE_DIR": "default uv cache dir"},
+            env={
+                "PYTHONPATH": "/root/resources_servers/my_server",
+                "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+                "UV_CACHE_DIR": "default uv cache dir",
+            },
             stdout="stdout",
             stderr="stderr",
         )
@@ -525,7 +571,11 @@ class TestCLISetupCommandRunCommandTeeLog(TestCLISetupCommandRunCommand):
             "set -o pipefail; (my command) 2>&1 | tee -a /tmp/gym_logs/my_server.log",
             executable="/bin/bash",
             shell=True,
-            env={"PYTHONPATH": "/root/resources_servers/my_server", "UV_CACHE_DIR": "default uv cache dir"},
+            env={
+                "PYTHONPATH": "/root/resources_servers/my_server",
+                "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+                "UV_CACHE_DIR": "default uv cache dir",
+            },
             stdout="stdout",
             stderr="stderr",
         )

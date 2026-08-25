@@ -107,6 +107,9 @@ class HarborAgentConfig(BaseResponsesAPIAgentConfig):
     # --- Job output ---
     # Directory where Harbor writes job results and trial artifacts.
     harbor_jobs_dir: str = "jobs"
+    # When enabled, a Harbor exception that prevents verification is surfaced as
+    # an HTTP error instead of being converted into a synthetic zero reward.
+    harbor_fail_on_trial_error: bool = False
 
     # Keep Docker runtime images between trials (maps to EnvironmentConfig.delete=False).
     harbor_no_delete: bool = True
@@ -132,6 +135,10 @@ def _find_trial_dir_with_result(job_dir: Path) -> Optional[Path]:
         if trial_dir.is_dir() and (trial_dir / "result.json").exists():
             return trial_dir
     return None
+
+
+class HarborTrialFailureError(RuntimeError):
+    """Raised when a failed Harbor trial has no valid verifier result."""
 
 
 async def run_harbor_job(job_config_dict: dict) -> str:
@@ -293,6 +300,23 @@ class HarborAgent(SimpleResponsesAPIAgent):
                 # Trajectories can be many MB; parse off the event loop.
                 trial_result, trajectory, agent_error_flags = await asyncio.to_thread(_read_trial_files)
 
+                if self.config.harbor_fail_on_trial_error:
+                    self._raise_for_failed_trial(trial_result, trial_dir)
+
+                # Read the ATIF trajectory (full conversation with per-token logprobs)
+                trajectory = None
+                trajectory_path = trial_dir / "agent" / "trajectory.json"
+                if trajectory_path.exists():
+                    with open(trajectory_path, "r") as f:
+                        trajectory = json.load(f)
+
+                # Read agent error flags written by the agent
+                agent_error_flags = {}
+                agent_error_flags_path = trial_dir / "agent" / "agent_error_flags.json"
+                if agent_error_flags_path.exists():
+                    with open(agent_error_flags_path, "r") as f:
+                        agent_error_flags = json.load(f)
+
                 # Extract reward from verifier result
                 verifier_result = trial_result.get("verifier_result")
                 reward = HarborAgentUtils.extract_reward(verifier_result)
@@ -308,6 +332,10 @@ class HarborAgent(SimpleResponsesAPIAgent):
                 usage = HarborAgentUtils.extract_usage(trial_result, trajectory)
 
             except Exception as e:
+                if self.config.harbor_fail_on_trial_error:
+                    raise HarborTrialFailureError(
+                        f"Harbor job failed for {instance_id}; no reward was emitted: {e}"
+                    ) from e
                 print(f"Error running Harbor job: {e}")
                 trial_result = None
                 trajectory = None
@@ -352,6 +380,24 @@ class HarborAgent(SimpleResponsesAPIAgent):
                 json.dump(verify_response.model_dump(), f, indent=2)
 
             return verify_response
+
+    @staticmethod
+    def _raise_for_failed_trial(trial_result: dict[str, Any], trial_dir: Path) -> None:
+        exception_info = trial_result.get("exception_info")
+        if trial_result.get("verifier_result") is not None:
+            return
+        exception_info = exception_info or {}
+        exception_type = exception_info.get("exception_type", "UnknownError")
+        exception_message = (
+            exception_info.get("exception_message")
+            or exception_info.get("message")
+            or "the trial recorded no exception details"
+        )
+        detail = f": {exception_message}" if exception_message else ""
+        raise HarborTrialFailureError(
+            f"Harbor trial failed before producing a verifier result ({exception_type}{detail}). "
+            f"Inspect {trial_dir / 'exception.txt'} and {trial_dir / 'trial.log'}."
+        )
 
     def _get_results_output_dir(self, policy_model_name: str, dataset_alias: str, run_timestamp: datetime) -> Path:
         """Build immutable run output directory grouped by date/dataset/model."""

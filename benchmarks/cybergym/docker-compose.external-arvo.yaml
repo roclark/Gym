@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Additive override for a Compose project containing the lab and the four raw
+# ARVO services named below. The lab executes Harbor locally and sends PoCs to
+# the raw runner images; no task-specific agent image is built.
+
+services:
+  lab:
+    # Merge-only extension of the existing Automodel lab service. Its image or
+    # build, NVIDIA runtime, command, entrypoint, volumes, and user continue to
+    # come from docker-compose.yml/docker-compose.production.yml. Users run the
+    # Gym CLI in that unchanged container.
+    environment:
+      - CYBERGYM_LOCAL_EXECUTION=true
+      - CYBERGYM_EXTERNAL_TASK_SERVER_URL=http://{runner_service}:9111
+      - CYBERGYM_HARBOR_TASKS_DIR=${CYBERGYM_HARBOR_TASKS_CONTAINER_DIR:-/dli/task/data/cybergym/harbor_tasks/level1}
+      - CYBERGYM_DATASET_PATH=${CYBERGYM_DATASET_CONTAINER_PATH:-/dli/task/data/cybergym/cybergym.jsonl}
+      - CYBERGYM_VALIDATION_DATASET_PATH=${CYBERGYM_VALIDATION_DATASET_CONTAINER_PATH:-/dli/task/data/cybergym/cybergym_validation.jsonl}
+      - CYBERGYM_CONCURRENCY=2
+
+  arvo_3938_fix:
+    user: "1011:1011"
+    command: ["/bin/sh", "-c", "until grep -q AUTH_TOKEN_FILE /cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_3938/environment/task-server/task_server.py 2>/dev/null; do sleep 2; done; exec python3 -u /cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_3938/environment/task-server/task_server.py"]
+    restart: on-failure
+    environment:
+      - CYBERGYM_ARVO_SERVICE_ROLE=fixed
+      - RUNNER_AUTH_TOKEN=${CYBERGYM_EXTERNAL_RUNNER_TOKEN:?set CYBERGYM_EXTERNAL_RUNNER_TOKEN before launch}
+      - PORT=9121
+      - POC_TIMEOUT_SEC=10
+      - MAX_POC_BYTES=10485760
+      - MAX_OUTPUT_BYTES=1048576
+    volumes:
+      - ${CYBERGYM_SHARED_TASK_DATA_HOST_DIR:-./task/data}:/cybergym-data:ro
+    expose: ["9121"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9121/health')"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  arvo_3938_vul:
+    # Correct the base development Compose file, where this service points to
+    # the fixed image.
+    image: n132/arvo:3938-vul
+    user: "1011:1011"
+    command: ["/bin/sh", "-c", "until grep -q AUTH_TOKEN_FILE /cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_3938/environment/task-server/task_server.py 2>/dev/null; do sleep 2; done; exec python3 -u /cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_3938/environment/task-server/task_server.py"]
+    restart: on-failure
+    environment:
+      - CYBERGYM_ARVO_SERVICE_ROLE=vulnerable
+      - AUTH_TOKEN_FILE=/cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_3938/environment/cybergym-apptainer.json
+      - RUNNER_AUTH_TOKEN=${CYBERGYM_EXTERNAL_RUNNER_TOKEN:?set CYBERGYM_EXTERNAL_RUNNER_TOKEN before launch}
+      - FIXED_RUNNER_URL=http://arvo_3938_fix:9121
+      - PORT=9111
+      - POC_TIMEOUT_SEC=10
+      - MAX_POC_BYTES=10485760
+      - MAX_OUTPUT_BYTES=1048576
+    volumes:
+      - ${CYBERGYM_SHARED_TASK_DATA_HOST_DIR:-./task/data}:/cybergym-data:ro
+    expose: ["9111"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9111/health')"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  arvo_47101_fix:
+    user: "1011:1011"
+    command: ["/bin/sh", "-c", "until grep -q AUTH_TOKEN_FILE /cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_47101/environment/task-server/task_server.py 2>/dev/null; do sleep 2; done; exec python3 -u /cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_47101/environment/task-server/task_server.py"]
+    restart: on-failure
+    environment:
+      - CYBERGYM_ARVO_SERVICE_ROLE=fixed
+      - RUNNER_AUTH_TOKEN=${CYBERGYM_EXTERNAL_RUNNER_TOKEN:?set CYBERGYM_EXTERNAL_RUNNER_TOKEN before launch}
+      - PORT=9121
+      - POC_TIMEOUT_SEC=10
+      - MAX_POC_BYTES=10485760
+      - MAX_OUTPUT_BYTES=1048576
+    volumes:
+      - ${CYBERGYM_SHARED_TASK_DATA_HOST_DIR:-./task/data}:/cybergym-data:ro
+    expose: ["9121"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9121/health')"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  arvo_47101_vul:
+    user: "1011:1011"
+    command: ["/bin/sh", "-c", "until grep -q AUTH_TOKEN_FILE /cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_47101/environment/task-server/task_server.py 2>/dev/null; do sleep 2; done; exec python3 -u /cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_47101/environment/task-server/task_server.py"]
+    restart: on-failure
+    environment:
+      - CYBERGYM_ARVO_SERVICE_ROLE=vulnerable
+      - AUTH_TOKEN_FILE=/cybergym-data/cybergym/harbor_tasks/level1/cybergym_arvo_47101/environment/cybergym-apptainer.json
+      - RUNNER_AUTH_TOKEN=${CYBERGYM_EXTERNAL_RUNNER_TOKEN:?set CYBERGYM_EXTERNAL_RUNNER_TOKEN before launch}
+      - FIXED_RUNNER_URL=http://arvo_47101_fix:9121
+      - PORT=9111
+      - POC_TIMEOUT_SEC=10
+      - MAX_POC_BYTES=10485760
+      - MAX_OUTPUT_BYTES=1048576
+    volumes:
+      - ${CYBERGYM_SHARED_TASK_DATA_HOST_DIR:-./task/data}:/cybergym-data:ro
+    expose: ["9111"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9111/health')"]
+      interval: 3s
+      timeout: 5s
+      retries: 20

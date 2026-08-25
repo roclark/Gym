@@ -1,0 +1,52 @@
+# Self-contained compose file for the Harbor revision pinned by NeMo Gym.
+# Newer Harbor versions merge task compose overrides with a base file; the
+# pinned revision selects this file directly, so the main service is included.
+services:
+  main:
+    build:
+      context: ${CONTEXT_DIR}
+    image: ${MAIN_IMAGE_NAME}
+    platform: linux/amd64
+    # Share only this trial's task-server network namespace. NETWORK_MODE is
+    # Harbor's built-in bridge/none policy, so no Compose subnet is allocated.
+    network_mode: "service:task-server"
+    # Do not run a firewall entrypoint inherited from an older prepared image.
+    # Docker's built-in network mode below is the authoritative egress policy.
+    entrypoint: []
+    command: ["/bin/bash", "-lc", "exec sleep infinity"]
+    environment:
+      - TEST_DIR=${TEST_DIR}
+      - CYBERGYM_TASK_SERVER_URL=http://127.0.0.1:9111
+    volumes:
+      - ${HOST_VERIFIER_LOGS_PATH}:${ENV_VERIFIER_LOGS_PATH}
+      - ${HOST_AGENT_LOGS_PATH}:${ENV_AGENT_LOGS_PATH}
+    deploy:
+      resources:
+        limits:
+          cpus: ${CPUS}
+          memory: ${MEMORY}
+    depends_on:
+      task-server:
+        condition: service_healthy
+
+  task-server:
+    build:
+      context: ${CONTEXT_DIR}/task-server
+    platform: linux/amd64
+    network_mode: ${NETWORK_MODE:-bridge}
+    environment:
+      - AUTH_TOKEN={auth_token}
+      - POC_TIMEOUT_SEC=10
+      - MAX_POC_BYTES=10485760
+      - MAX_OUTPUT_BYTES=1048576
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4096M
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9111/health')"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s

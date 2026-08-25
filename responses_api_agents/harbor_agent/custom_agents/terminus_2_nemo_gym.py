@@ -13,16 +13,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import shlex
 from pathlib import Path
 from typing import Any, Literal
 
 from harbor.agents.terminus_2.terminus_2 import Terminus2
+from harbor.agents.terminus_2.tmux_session import TmuxSession
 from harbor.environments.base import BaseEnvironment
 from harbor.llms.base import BaseLLM
 from harbor.models.agent.context import AgentContext
+from harbor.models.trial.paths import EnvironmentPaths
 
 from responses_api_agents.harbor_agent.custom_agents.llms.nemo_gym_llm import NemoGymLLM
 from responses_api_agents.harbor_agent.custom_envs.singularity.singularity import MemoryLimitExceededError
+
+
+class _LocalTmuxSession(TmuxSession):
+    """Start detached tmux directly when Harbor already runs in the lab container."""
+
+    @property
+    def _tmux_start_session(self) -> str:
+        session_name = shlex.quote(self._session_name)
+        pipe_command = shlex.quote(f"cat > {self._logging_path}")
+        startup_log = shlex.quote(str(self._logging_path.with_name("tmux-start.log")))
+        return (
+            "export TERM=xterm-256color && "
+            "export SHELL=/bin/bash && "
+            f"timeout 30s tmux new-session -x {self._pane_width} -y {self._pane_height} "
+            f"-d -s {session_name} 'bash --login' \\; "
+            f"pipe-pane -t {session_name} {pipe_command} "
+            f"</dev/null >{startup_log} 2>&1; "
+            "status=$?; "
+            f'if [ "$status" -ne 0 ]; then cat {startup_log} >&2; fi; '
+            'exit "$status"'
+        )
 
 
 class Terminus2NemoGym(Terminus2):
@@ -98,6 +122,36 @@ class Terminus2NemoGym(Terminus2):
             *args,
             **kwargs,
         )
+
+    async def setup(self, environment: BaseEnvironment) -> None:
+        """Start tmux without a nested PTY wrapper for in-container execution."""
+        if not getattr(environment, "cybergym_local_execution", False):
+            await super().setup(environment)
+            return
+
+        if self._record_terminal_session:
+            local_recording_path = environment.trial_paths.agent_dir / "recording.cast"
+            remote_recording_path = EnvironmentPaths.agent_dir / "recording.cast"
+        else:
+            local_recording_path = None
+            remote_recording_path = None
+
+        # Harbor's generic tmux launcher wraps the detached command in
+        # `script -qc` for Docker exec. Here Harbor already runs inside the lab
+        # container, and some util-linux/tmux combinations keep that wrapper's
+        # PTY open forever after the detached server starts.
+        self.logger.debug("Starting tmux directly for CyberGym local execution")
+        self._session = _LocalTmuxSession(
+            session_name=self.name(),
+            environment=environment,
+            logging_path=EnvironmentPaths.agent_dir / "terminus_2.pane",
+            local_asciinema_recording_path=local_recording_path,
+            remote_asciinema_recording_path=remote_recording_path,
+            pane_width=self._tmux_pane_width,
+            pane_height=self._tmux_pane_height,
+        )
+        await self._session.start()
+        self.logger.debug("CyberGym local tmux setup completed")
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         """Override run() to gracefully handle agent errors.

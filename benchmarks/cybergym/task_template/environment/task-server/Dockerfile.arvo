@@ -1,0 +1,19 @@
+# CyberGym ARVO verifier sidecar. The agent container cannot access these
+# vulnerable/fixed binaries or the reference PoC directly.
+FROM --platform=linux/amd64 {fixed_image} AS fixed-runner
+FROM --platform=linux/amd64 {vulnerable_image}
+
+RUN mkdir -p /cybergym/vul/out /cybergym/vul/bin \
+    && cp -a /out/. /cybergym/vul/out/ \
+    && cp /bin/arvo /cybergym/vul/bin/arvo
+
+RUN mkdir -p /cybergym/fix/out /cybergym/fix/bin
+COPY --from=fixed-runner /out/ /cybergym/fix/out/
+COPY --from=fixed-runner /bin/arvo /cybergym/fix/bin/arvo
+
+RUN mkdir -p /tests && cp /tmp/poc /tests/ground_truth_poc
+RUN rm -rf /out /tmp/poc
+
+COPY task_server.py /task_server.py
+EXPOSE 9111
+CMD ["python3", "-u", "/task_server.py"]

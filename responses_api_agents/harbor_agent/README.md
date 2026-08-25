@@ -59,11 +59,18 @@ Common `harbor_environment_kwargs` for this environment:
 - `singularity_image_cache_dir`: cache directory for converted `.sif` images.
 - `singularity_force_pull`: force re-pull/re-convert the image instead of using cache.
 - `singularity_no_mount`: override/suppress selected Singularity default mounts.
+- `singularity_executable`: explicit runtime binary/path. When omitted, the
+  backend prefers `apptainer` and falls back to `singularity`.
 - `workdir`: override container working directory.
 
 Singularity does not enforce cgroups-based memory limits on most HPC clusters (no
 systemd init). The environment runs a userspace memory watchdog that monitors PSS
 and kills the container at 95% of the task's configured `memory_mb`.
+
+CyberGym uses its own Docker/Apptainer subclasses because its trusted verifier
+requires vulnerable and fixed runner images in addition to the agent image. See
+[`benchmarks/cybergym/README.md`](../../benchmarks/cybergym/README.md) for the
+directly selectable evaluation and RL configs.
 
 ## Quick Start
 
@@ -85,12 +92,14 @@ tar -xzf responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_task
 
 ### 2) Set up dependencies and task images
 
-- Install `git` (required because `requirements.txt` installs Harbor from a Git URL)
-  and Apptainer/Singularity (required when running Harbor tasks on HPC clusters
-  with the Singularity environment).
+- Install Apptainer/Singularity when running Harbor tasks on HPC clusters with
+  the Singularity environment. During normal NeMo Gym server setup,
+  `prepare_install.py` downloads the pinned Harbor source archive from GitHub's
+  codeload endpoint, verifies its SHA-256 checksum, and caches it under `.deps/`.
+  This avoids depending on Git transport during server startup.
 
 ```bash
-apt-get update && apt-get install -y git wget
+apt-get update && apt-get install -y wget
 cd /tmp
 wget https://github.com/apptainer/apptainer/releases/download/v1.4.2/apptainer_1.4.2_amd64.deb
 apt-get install -y ./apptainer_1.4.2_amd64.deb
@@ -484,8 +493,11 @@ on long-running cluster jobs. Job outputs are grouped by day in `harbor_jobs_dir
 
 ### Known failure cases during RL training
 
-When the Harbor agent fails during rollout collection, the sample returns `reward=0.0`
-and an empty `output` list (no output items with `generation_token_ids`). 
+By default, when the Harbor agent fails during rollout collection, the sample
+returns `reward=0.0` and an empty `output` list (no output items with
+`generation_token_ids`). Set `harbor_fail_on_trial_error: true` to surface a
+failed/unverified trial as an HTTP error instead. CyberGym enables this strict
+mode because infrastructure failures are not valid RL reward labels.
 
 Common symptom: `IndexError: list index out of range` at `rollouts.py:1185`. This
 usually means at least one rollout returned an empty `input_message_log`, and a
@@ -505,8 +517,9 @@ contribution while tracking their rate in metrics.
 - **Singularity environment setup failure**: `upload_file` or `upload_dir` fails during
   container initialization (e.g., tmux_session uploads `get-asciinema-timestamp.sh` to
   `/tmp`). The trial raises `RuntimeError` before the agent runs any turns.
-- **Unhandled exception in `run_harbor_job`**: `app.py` catches all exceptions, sets
-  `output_items=[]` and `reward=0.0`.
+- **Unhandled exception in `run_harbor_job`**: with the compatibility default,
+  `app.py` catches the exception and emits an empty synthetic-zero response;
+  strict mode raises it to the rollout caller.
 
 **Scenarios that preserve partial trajectories (do NOT produce empty output):**
 

@@ -28,6 +28,7 @@ import socket
 import subprocess
 import tempfile
 from pathlib import Path
+from re import fullmatch
 
 import httpx
 from harbor.environments.base import BaseEnvironment, ExecResult
@@ -68,6 +69,7 @@ class SingularityEnvironment(BaseEnvironment):
         singularity_image_cache_dir: Path | str | None = None,
         singularity_force_pull: bool = False,
         singularity_no_mount: str | None = None,
+        singularity_executable: str | None = None,
         workdir: str | None = None,
         *args,
         **kwargs,
@@ -79,6 +81,7 @@ class SingularityEnvironment(BaseEnvironment):
 
         self._force_pull = singularity_force_pull
         self._singularity_no_mount = singularity_no_mount
+        self._singularity_executable = self._resolve_singularity_executable(singularity_executable)
         self._workdir_override = workdir
 
         super().__init__(
@@ -119,6 +122,36 @@ class SingularityEnvironment(BaseEnvironment):
     @property
     def can_disable_internet(self) -> bool:
         return False
+
+    @staticmethod
+    def _resolve_singularity_executable(configured: str | None = None) -> str:
+        """Resolve Apptainer first, while retaining Singularity compatibility."""
+        if configured:
+            executable = shutil.which(configured)
+            if executable is None:
+                raise FileNotFoundError(f"Configured Apptainer/Singularity executable was not found: {configured}")
+            return executable
+
+        for candidate in ("apptainer", "singularity"):
+            executable = shutil.which(candidate)
+            if executable is not None:
+                return executable
+        raise FileNotFoundError(
+            "Neither 'apptainer' nor 'singularity' is available on PATH. Install Apptainer "
+            "or set harbor_environment_kwargs.singularity_executable explicitly."
+        )
+
+    def _container_environment(self) -> dict[str, str]:
+        """Environment variables injected into the container command server."""
+        return {}
+
+    def _runtime_fakeroot_args(self) -> list[str]:
+        """Return runtime fakeroot arguments.
+
+        Keep the existing generic-backend behavior while allowing specialized
+        environments to run prebuilt SIFs without requiring fakeroot support.
+        """
+        return ["--fakeroot"] if os.getuid() != 0 else []
 
     @property
     def _is_sif_image(self) -> bool:
@@ -177,6 +210,17 @@ class SingularityEnvironment(BaseEnvironment):
         port = s.getsockname()[1]
         return s, port
 
+    @staticmethod
+    async def _terminate_subprocess(process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.communicate()
+
     async def _convert_docker_to_sif(self, docker_image: str) -> Path:
         """Convert a Docker image to Singularity .sif format.
 
@@ -225,7 +269,7 @@ class SingularityEnvironment(BaseEnvironment):
             tmp_sif_path = self._image_cache_dir / f"{safe_name}.sif.tmp.{self.session_id}"
 
             # Pull from Docker registry
-            cmd = ["singularity", "pull", str(tmp_sif_path), f"docker://{docker_image}"]
+            cmd = [self._singularity_executable, "pull", str(tmp_sif_path), f"docker://{docker_image}"]
 
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -233,7 +277,12 @@ class SingularityEnvironment(BaseEnvironment):
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            stdout, stderr = await process.communicate()
+            try:
+                stdout, stderr = await process.communicate()
+            except BaseException:
+                await self._terminate_subprocess(process)
+                tmp_sif_path.unlink(missing_ok=True)
+                raise
 
             if process.returncode != 0:
                 # Clean up failed temporary file
@@ -348,6 +397,11 @@ class SingularityEnvironment(BaseEnvironment):
                     part = part.strip()
                     if part:
                         no_mount_args.extend(["--no-mount", part])
+            container_env_args: list[str] = []
+            for key, value in sorted(self._container_environment().items()):
+                if fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+                    raise ValueError(f"Invalid container environment variable name: {key!r}")
+                container_env_args.extend(["--env", f"{key}={value}"])
             # Use exec + wrapper so /app exists before runtime chdir to image WORKDIR (R2E-Gym has no /app)
             bootstrap_cmd = [
                 "bash",
@@ -361,10 +415,12 @@ class SingularityEnvironment(BaseEnvironment):
                 "--workdir",
                 self._workdir,
             ]
+            fakeroot_args = self._runtime_fakeroot_args()
             cmd = [
-                "singularity",
+                self._singularity_executable,
                 "exec",
                 *no_mount_args,
+                *container_env_args,
                 "--pwd",
                 self._workdir,
                 "--writable-tmpfs",

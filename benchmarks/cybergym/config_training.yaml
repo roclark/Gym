@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Keep training data separate from the benchmark rows. Inheriting into a new
+# outer instance suppresses the base eval instance and gives collated RL rows a
+# distinct, reproducible agent_ref.
+config_paths:
+  - benchmarks/cybergym/config.yaml
+
+cybergym_training:
+  _inherit_from: cybergym
+  responses_api_agents:
+    harbor_agent:
+      datasets:
+        - name: cybergym_train
+          type: train
+          jsonl_fpath: benchmarks/cybergym/data/cybergym_train.jsonl
+          num_repeats: 1
+          license: Apache 2.0
+        - name: cybergym_validation
+          type: validation
+          jsonl_fpath: benchmarks/cybergym/data/cybergym_validation.jsonl
+          num_repeats: 1
+          license: Apache 2.0

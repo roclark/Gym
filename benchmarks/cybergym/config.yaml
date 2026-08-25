@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# CyberGym runs as a Harbor-native task environment. The Harbor agent owns
+# container lifecycle and verification, then returns the scalar reward and
+# trajectory through NeMo Gym's normal /run contract.
+responses_create_params:
+  temperature: 1.0
+  top_p: 1.0
+
+cybergym:
+  responses_api_agents:
+    harbor_agent:
+      entrypoint: app.py
+      domain: coding
+      description: CyberGym real-world vulnerability analysis through NeMo Gym's Harbor bridge
+      value: Evaluate and train models to generate proof-of-concept inputs for real C/C++ vulnerabilities
+      concurrency: ${oc.env:CYBERGYM_CONCURRENCY,2}
+
+      harbor_datasets:
+        cybergym:
+          local_dataset_path: ${oc.env:CYBERGYM_HARBOR_TASKS_DIR,benchmarks/cybergym/data/harbor_tasks/level1}
+          workdir: /workspace
+
+      # This wrapper sends every model turn through the configured NeMo Gym
+      # policy server and preserves token IDs/logprobs for RL training.
+      harbor_agent_name: null
+      harbor_agent_import_path: responses_api_agents.harbor_agent.custom_agents.terminus_2_nemo_gym:Terminus2NemoGym
+      harbor_agent_kwargs:
+        max_turns: 100
+        interleaved_thinking: true
+        enable_summarize: false
+        collect_rollout_details: true
+        record_terminal_session: false
+        nemo_model_server_timeout_sec: 1800
+        trajectory_config:
+          raw_content: true
+        model_info:
+          max_input_tokens: ${oc.env:CYBERGYM_MAX_INPUT_TOKENS,131072}
+          max_output_tokens: ${oc.env:CYBERGYM_MAX_OUTPUT_TOKENS,32768}
+          input_cost_per_token: 0.0
+          output_cost_per_token: 0.0
+
+      harbor_environment_type: null
+      harbor_environment_import_path: responses_api_agents.harbor_agent.custom_envs.cybergym.cybergym:CyberGymDockerEnvironment
+      harbor_environment_kwargs:
+        # Local execution runs Harbor directly in the current evaluator (for
+        # example an Automodel lab container) and sends only PoCs to existing
+        # task-server services on its Compose network.
+        cybergym_local_execution: ${oc.env:CYBERGYM_LOCAL_EXECUTION,false}
+        cybergym_external_task_server_url: ${oc.env:CYBERGYM_EXTERNAL_TASK_SERVER_URL,''}
+      # Infrastructure/setup failures are not valid negative labels for RL.
+      harbor_fail_on_trial_error: true
+
+      model_server:
+        type: responses_api_models
+        name: policy_model
+
+      # Generated task.toml files carry the canonical 1200s/180s defaults.
+      # Caps retain shorter task-specific limits while preventing accidental
+      # unbounded runs from locally modified tasks.
+      harbor_agent_override_timeout: null
+      harbor_agent_max_timeout: 1200
+      harbor_verifier_override_timeout: null
+      harbor_verifier_max_timeout: 180
+      harbor_timeout_multiplier: 1.0
+      harbor_jobs_dir: ${oc.env:CYBERGYM_HARBOR_JOBS_DIR,results/cybergym/harbor_jobs}
+
+      datasets:
+        # Modern benchmark commands use --split benchmark.
+        - name: cybergym
+          type: benchmark
+          jsonl_fpath: ${oc.env:CYBERGYM_DATASET_PATH,benchmarks/cybergym/data/cybergym_benchmark.jsonl}
+          prompt_config: null
+          prepare_script: benchmarks/cybergym/prepare.py
+          num_repeats: 1
+        # Kept intentionally so existing ng_e2e_collect_rollouts wrappers that
+        # hard-code ++split=validation can use the same prepared rows.
+        - name: cybergym_validation
+          type: validation
+          jsonl_fpath: ${oc.env:CYBERGYM_VALIDATION_DATASET_PATH,benchmarks/cybergym/data/cybergym_validation.jsonl}
+          num_repeats: 1
+          license: Apache 2.0
